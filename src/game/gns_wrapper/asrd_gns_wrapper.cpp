@@ -127,7 +127,7 @@ extern "C" ASRD_GNS_WRAPPER_API int ASRD_GNS_Listen( uint16_t port )
 
 	SteamNetworkingIPAddr address;
 	address.Clear();
-	address.SetIPv4( 0x7f000001, port );
+	address.SetIPv4( 0, port );
 	s_listenSocket = s_sockets->CreateListenSocketIP( address, 0, NULL );
 	if ( s_listenSocket == k_HSteamListenSocket_Invalid )
 	{
@@ -135,7 +135,7 @@ extern "C" ASRD_GNS_WRAPPER_API int ASRD_GNS_Listen( uint16_t port )
 		return ASRD_GNS_CONNECTION_INVALID;
 	}
 
-	Log( "[ASRD-GNS] server ready listen=127.0.0.1:%u\n", (unsigned)port );
+	Log( "[ASRD-GNS] server ready listen=0.0.0.0:%u\n", (unsigned)port );
 	return ASRD_GNS_CONNECTION_ACTIVE;
 }
 
@@ -147,17 +147,28 @@ extern "C" ASRD_GNS_WRAPPER_API ASRD_GNS_Connection ASRD_GNS_Connect( const char
 	if ( s_connection != k_HSteamNetConnection_Invalid )
 		s_sockets->CloseConnection( s_connection, 0, "replacing wrapper connection", false );
 
-	const char *target = ( ipv4 && ipv4[0] ) ? ipv4 : "127.0.0.1";
+	const char *target = ( ipv4 && ipv4[0] ) ? ipv4 : NULL;
+	if ( !target )
+	{
+		Log( "[ASRD-GNS] client rejected missing target\n" );
+		return ASRD_GNS_CONNECTION_INVALID;
+	}
 	const unsigned long packedAddress = inet_addr( target );
 	if ( packedAddress == INADDR_NONE && strcmp( target, "255.255.255.255" ) != 0 )
 	{
 		Log( "[ASRD-GNS] client rejected non-IPv4 target=%s\n", target );
 		return ASRD_GNS_CONNECTION_INVALID;
 	}
+	const unsigned long hostAddress = ntohl( packedAddress );
+	if ( hostAddress == 0 || ( hostAddress >> 24 ) == 127 || ( hostAddress >> 24 ) >= 224 )
+	{
+		Log( "[ASRD-GNS] client rejected loopback/unspecified target=%s\n", target );
+		return ASRD_GNS_CONNECTION_INVALID;
+	}
 
 	SteamNetworkingIPAddr address;
 	address.Clear();
-	address.SetIPv4( ntohl( packedAddress ), port );
+	address.SetIPv4( hostAddress, port );
 	s_connection = s_sockets->ConnectByIPAddress( address, 0, NULL );
 	if ( s_connection == k_HSteamNetConnection_Invalid )
 	{

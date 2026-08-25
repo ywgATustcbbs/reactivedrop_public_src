@@ -4,11 +4,14 @@
 
 #include "../gns_wrapper/asrd_gns_wrapper.h"
 
+#include <stdio.h>
 #include <string.h>
 
 namespace
 {
-	const uint16_t kSmokePort = 27016;
+	const int kDefaultSmokePort = 27016;
+	const char kSmokeTargetParm[] = "-gns-test-target";
+	const char kSmokePortParm[] = "-gns-test-port";
 	const char kProbeMessage[] = "ASRD_GNS_SMOKE";
 	const char kAckMessage[] = "ASRD_GNS_ACK";
 
@@ -18,6 +21,21 @@ namespace
 	static bool s_ackSent = false;
 	static bool s_initialized = false;
 	static ASRD_GNS_Connection s_connection = ASRD_GNS_CONNECTION_INVALID;
+
+	static bool IsNonLoopbackIPv4( const char *address )
+	{
+		unsigned int octets[ 4 ] = {};
+		char trailing = '\0';
+		if ( !address || sscanf( address, "%u.%u.%u.%u%c",
+			octets + 0, octets + 1, octets + 2, octets + 3, &trailing ) != 4 )
+			return false;
+		for ( int i = 0; i < 4; ++i )
+		{
+			if ( octets[ i ] > 255 )
+				return false;
+		}
+		return octets[ 0 ] != 0 && octets[ 0 ] != 127;
+	}
 }
 
 bool ASRD_GNS_SmokeInit( bool serverRole )
@@ -27,6 +45,16 @@ bool ASRD_GNS_SmokeInit( bool serverRole )
 
 	s_enabled = true;
 	s_serverRole = serverRole;
+	const char *gnsTarget = CommandLine()->ParmValue( kSmokeTargetParm, "" );
+	const int requestedPort = CommandLine()->ParmValue( kSmokePortParm, kDefaultSmokePort );
+	if ( !IsNonLoopbackIPv4( gnsTarget ) || requestedPort <= 0 || requestedPort > 65535 )
+	{
+		Warning( "[ASRD-GNS] game probe rejected target/port target=%s port=%d\n",
+			gnsTarget && gnsTarget[ 0 ] ? gnsTarget : "<missing>", requestedPort );
+		s_enabled = false;
+		return false;
+	}
+	const uint16_t smokePort = (uint16_t)requestedPort;
 	if ( !ASRD_GNS_Initialize( serverRole ? 1 : 0 ) )
 	{
 		Warning( "[ASRD-GNS] game probe initialization failed\n" );
@@ -35,8 +63,8 @@ bool ASRD_GNS_SmokeInit( bool serverRole )
 
 	s_initialized = true;
 	s_connection = serverRole
-		? (ASRD_GNS_Connection)ASRD_GNS_Listen( kSmokePort )
-		: ASRD_GNS_Connect( "127.0.0.1", kSmokePort );
+		? (ASRD_GNS_Connection)ASRD_GNS_Listen( smokePort )
+		: ASRD_GNS_Connect( gnsTarget, smokePort );
 	if ( s_connection == ASRD_GNS_CONNECTION_INVALID )
 	{
 		Warning( "[ASRD-GNS] game probe endpoint setup failed role=%s\n", serverRole ? "server" : "client" );
