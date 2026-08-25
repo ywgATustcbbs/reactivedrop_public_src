@@ -15,6 +15,7 @@
 #include "clientsideeffects.h"
 #include "particlemgr.h"
 #include "steam/steam_api.h"
+#include "asrd_gns_smoke_probe.h"
 #include "smoke_fog_overlay.h"
 #include "view.h"
 #include "ienginevgui.h"
@@ -1251,6 +1252,7 @@ int CHLClient::Init( CreateInterfaceFn appSystemFactory, CGlobalVarsBase *pGloba
 
 	// This is a fullscreen element, so only lives on slot 0!!!
 	m_pHudCloseCaption = GET_FULLSCREEN_HUDELEMENT( CHudCloseCaption );
+	ASRD_GNS_SmokeInit( false );
 
 	COM_TimestampedLog( "ClientDLL Init - Finish" );
 	return true;
@@ -1271,6 +1273,7 @@ void CHLClient::PostInit()
 //-----------------------------------------------------------------------------
 void CHLClient::Shutdown( void )
 {
+	ASRD_GNS_SmokeShutdown();
 
 
 	ActivityList_Free();
@@ -1371,6 +1374,8 @@ void CHLClient::HudProcessInput( bool bActive )
 //-----------------------------------------------------------------------------
 void CHLClient::HudUpdate( bool bActive )
 {
+	ASRD_GNS_SmokeFrame();
+
 	float frametime = gpGlobals->frametime;
 
 	GetClientVoiceMgr()->Frame( frametime );

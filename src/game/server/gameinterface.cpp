@@ -93,6 +93,7 @@
 #include "querycache.h"
 #include "particle_parse.h"
 #include "steam/steam_gameserver.h"
+#include "asrd_gns_smoke_probe.h"
 #include "tier3/tier3.h"
 #include "serverbenchmark_base.h"
 #include "vscript/ivscript.h"
@@ -818,6 +819,7 @@ bool CServerGameDLL::DLLInit( CreateInterfaceFn appSystemFactory,
 
 	// init the gamestatsupload connection
 	gamestatsuploader->InitConnection();
+	ASRD_GNS_SmokeInit( true );
 
 
 	return true;
@@ -848,6 +850,7 @@ void CServerGameDLL::PostToolsInit()
 
 void CServerGameDLL::DLLShutdown( void )
 {
+	ASRD_GNS_SmokeShutdown();
 
 	// Due to dependencies, these are not autogamesystems
 	ModelSoundsCacheShutdown();
@@ -1280,6 +1283,8 @@ void CServerGameDLL::GameFrame( bool simulating )
 	// Don't run frames until fully restored
 	if ( g_InRestore )
 		return;
+
+	ASRD_GNS_SmokeFrame();
 
 #ifndef NO_STEAM
 	// All the calls to us from the engine prior to gameframe (like LevelInit & ServerActivate)
