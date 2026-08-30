@@ -724,6 +724,38 @@ extern "C" ASRD_GNS_WRAPPER_API int ASRD_GNS_Flush(
 	return (int)result;
 }
 
+extern "C" ASRD_GNS_WRAPPER_API int ASRD_GNS_GetConnectionRealTimeStatus(
+	ASRD_GNS_Connection connection,
+	ASRD_GNS_ConnectionRealtimeStatus *status )
+{
+	if ( !status )
+		return (int)k_EResultInvalidParam;
+
+	// Keep failure and pre-connection observations deterministic.  In
+	// particular, never let a caller accidentally interpret the zero-initialized
+	// native m_nPing as a valid zero-latency sample.
+	status->connected = 0;
+	status->pingMilliseconds = -1;
+
+	const HSteamNetConnection nativeConnection = ResolveConnection( connection );
+	if ( !s_initialized || !s_sockets ||
+		nativeConnection == k_HSteamNetConnection_Invalid )
+		return (int)k_EResultNoConnection;
+
+	SteamNetConnectionRealTimeStatus_t nativeStatus = {};
+	const EResult result = s_sockets->GetConnectionRealTimeStatus(
+		nativeConnection, &nativeStatus, 0, NULL );
+	if ( result != k_EResultOK )
+		return (int)result;
+
+	const bool connected = nativeStatus.m_eState ==
+		k_ESteamNetworkingConnectionState_Connected;
+	status->connected = connected ? 1 : 0;
+	if ( connected && nativeStatus.m_nPing >= 0 )
+		status->pingMilliseconds = nativeStatus.m_nPing;
+	return (int)k_EResultOK;
+}
+
 extern "C" ASRD_GNS_WRAPPER_API int ASRD_GNS_SendReliable(
 	ASRD_GNS_Connection connection, const void *data, uint32_t size )
 {

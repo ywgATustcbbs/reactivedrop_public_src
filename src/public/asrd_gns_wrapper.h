@@ -77,6 +77,16 @@ typedef struct ASRD_GNS_ConnectionEvent
 	int reason;
 } ASRD_GNS_ConnectionEvent;
 
+// A game-facing snapshot of the connection's real-time status.  This keeps
+// the GNS status object and enum entirely inside the wrapper DLL.  The ping
+// value is in milliseconds, matching the public GNS status contract; callers
+// that expose Source's latency API must convert it to seconds.
+typedef struct ASRD_GNS_ConnectionRealtimeStatus
+{
+	int connected;
+	int pingMilliseconds;
+} ASRD_GNS_ConnectionRealtimeStatus;
+
 // The game-facing ABI deliberately contains no GameNetworkingSockets types or headers.
 // Selects the wrapper's transport mode; this is independent of the game
 // DLL/runtime identity tracked by the game-side lifecycle.
@@ -90,6 +100,13 @@ ASRD_GNS_WRAPPER_API int ASRD_GNS_ConfigureLanes( ASRD_GNS_Connection connection
 ASRD_GNS_WRAPPER_API int ASRD_GNS_SendLane( ASRD_GNS_Connection connection,
 	const void *data, uint32_t size, uint8_t lane, int flags );
 ASRD_GNS_WRAPPER_API int ASRD_GNS_Flush( ASRD_GNS_Connection connection );
+// Returns a native EResult value.  On success, status is populated with the
+// current connection state and GNS's already-smoothed ping sample.  A status
+// query can succeed while a connection is still handshaking; callers must
+// require connected != 0 and pingMilliseconds >= 0 before using the sample.
+ASRD_GNS_WRAPPER_API int ASRD_GNS_GetConnectionRealTimeStatus(
+	ASRD_GNS_Connection connection,
+	ASRD_GNS_ConnectionRealtimeStatus *status );
 // Compatibility probe API. New bridge traffic uses ASRD_GNS_SendLane.
 ASRD_GNS_WRAPPER_API int ASRD_GNS_SendReliable( ASRD_GNS_Connection connection, const void *data, uint32_t size );
 ASRD_GNS_WRAPPER_API int ASRD_GNS_Receive( ASRD_GNS_Connection connection, void *buffer, uint32_t capacity, uint32_t *size );

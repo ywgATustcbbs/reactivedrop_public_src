@@ -91,6 +91,14 @@ namespace
 	static double s_disconnectDeadline = 0.0;
 	static bool s_disconnectTimerArmed = false;
 	static bool s_compatibilityFatal = false;
+	// Source asks for latency by flow, while the current wrapper exposes only
+	// one connection-level GNS RTT.  Keep the last valid sample per connection
+	// generation so a transient status-query failure does not turn into a
+	// synthetic zero, but never carry it across a new opaque connection token.
+	static ASRD_GNS_Connection s_adapterLatencyConnection =
+		ASRD_GNS_CONNECTION_INVALID;
+	static float s_adapterLatencySeconds = 0.0f;
+	static bool s_adapterLatencyValid = false;
 	// These flags belong to one GNS connection generation.  They are deliberately
 	// separate from compatibility/packet bookkeeping so a new takeover cannot
 	// inherit a previously primed Source signon state.
@@ -126,7 +134,6 @@ namespace
 	static bool s_adapterSequenceLogged = false;
 	static bool s_adapterTransmitLogged = false;
 	static bool s_adapterRemoteDisconnectedLogged = false;
-	static bool s_adapterAvgLatencyLogged = false;
 	static bool s_adapterAvgLossLogged = false;
 	static bool s_adapterAvgChokeLogged = false;
 	static bool s_adapterAvgPacketsLogged = false;
@@ -150,6 +157,9 @@ namespace
 
 	static void ResetConnectionGenerationState( void )
 	{
+		s_adapterLatencyConnection = ASRD_GNS_CONNECTION_INVALID;
+		s_adapterLatencySeconds = 0.0f;
+		s_adapterLatencyValid = false;
 		s_challengePrimed = false;
 		s_connectedPrimed = false;
 		s_localConnectedPrime = false;
@@ -178,6 +188,8 @@ namespace
 	static float __fastcall RegistrationAdapterGetTimeoutSeconds( void *self, void * );
 	static float __fastcall RegistrationAdapterGetTimeSinceLastReceived( void *self,
 		void * );
+	static float __fastcall RegistrationAdapterGetLatency( void *self, void *,
+		int flow );
 	static void __fastcall RegistrationAdapterSetChoked( void *self, void * );
 	static int __fastcall RegistrationAdapterSendDatagram( void *self, void *, void *data );
 	static bool __fastcall RegistrationAdapterCanPacket( void *self, void * );
@@ -791,6 +803,8 @@ namespace
 			(void *)(uintptr_t)&RegistrationAdapterGetTimeSinceLastReceived;
 		s_registrationVtable[ 26 ] =
 			(void *)(uintptr_t)&RegistrationAdapterGetTimeoutSeconds;
+		s_registrationVtable[ 9 ] =
+			(void *)(uintptr_t)&RegistrationAdapterGetLatency;
 		s_registrationVtable[ 46 ] =
 			(void *)(uintptr_t)&RegistrationAdapterSetChoked;
 		s_registrationVtable[ 47 ] =
@@ -1242,6 +1256,58 @@ namespace
 		return sent;
 	}
 
+	static float GetRecentAdapterLatency( int flow )
+	{
+		// GNS currently exposes one connection-level RTT rather than separate
+		// send/receive samples.  Both Source flows intentionally use that same
+		// value as a direction-statistics approximation.
+		(void)flow;
+		const ASRD_GNS_Connection connection = ASRD_GNS_ClientConnection();
+		if ( connection == ASRD_GNS_CONNECTION_INVALID ||
+			ASRD_GNS_ClientState() != ASRD_GNS_CLIENT_CONNECTED )
+		{
+			s_adapterLatencyConnection = ASRD_GNS_CONNECTION_INVALID;
+			s_adapterLatencySeconds = 0.0f;
+			s_adapterLatencyValid = false;
+			return 0.0f;
+		}
+
+		if ( s_adapterLatencyConnection != connection )
+		{
+			// Opaque tokens are generation-scoped.  A token change must invalidate
+			// the previous sample before querying the new connection.
+			s_adapterLatencyConnection = connection;
+			s_adapterLatencySeconds = 0.0f;
+			s_adapterLatencyValid = false;
+		}
+
+		ASRD_GNS_ConnectionRealtimeStatus status = {};
+		const int result = ASRD_GNS_GetConnectionRealTimeStatus( connection, &status );
+		if ( result == ASRD_GNS_RESULT_OK && status.connected != 0 &&
+			status.pingMilliseconds >= 0 )
+		{
+			// m_nPing is already smoothed by GNS.  Convert milliseconds to Source
+			// seconds directly; do not apply a second EMA or divide by two.
+			s_adapterLatencySeconds = (float)status.pingMilliseconds * 0.001f;
+			s_adapterLatencyValid = true;
+		}
+
+		return s_adapterLatencyValid ? s_adapterLatencySeconds : 0.0f;
+	}
+
+	static float __fastcall RegistrationAdapterGetLatency( void *self, void *,
+		int flow )
+	{
+		if ( self != &s_registrationAdapter )
+		{
+			LogContextf( "adapter unexpected GetLatency self=%p expected=%p flow=%d",
+				self, &s_registrationAdapter, flow );
+			return 0.0f;
+		}
+
+		return GetRecentAdapterLatency( flow );
+	}
+
 	static float __fastcall RegistrationAdapterGetAvgLatency( void *self, void *,
 		int flow )
 	{
@@ -1251,13 +1317,8 @@ namespace
 				self, &s_registrationAdapter, flow );
 			return 0.0f;
 		}
-		if ( !s_adapterAvgLatencyLogged )
-		{
-			s_adapterAvgLatencyLogged = true;
-			LogContextf( "adapter GetAvgLatency flow=%d served value=0.0",
-				flow );
-		}
-		return 0.0f;
+
+		return GetRecentAdapterLatency( flow );
 	}
 
 	static float __fastcall RegistrationAdapterGetAvgLoss( void *self, void *,

@@ -184,6 +184,21 @@ namespace
 	static bool s_sourceSignonAttempted = false;
 	static bool s_sourceSignonInProgress = false;
 	static void *s_contextClient = NULL;
+	// Source asks for latency by flow, while the current wrapper exposes only
+	// one connection-level GNS RTT.  Keep the last valid sample per connection
+	// generation, and invalidate it whenever the mapped token changes.
+	static ASRD_GNS_Connection s_adapterLatencyConnection =
+		ASRD_GNS_CONNECTION_INVALID;
+	static float s_adapterLatencySeconds = 0.0f;
+	static bool s_adapterLatencyValid = false;
+
+	static void ResetAdapterLatencySample( void )
+	{
+		s_adapterLatencyConnection = ASRD_GNS_CONNECTION_INVALID;
+		s_adapterLatencySeconds = 0.0f;
+		s_adapterLatencyValid = false;
+	}
+
 	// These are logical Source-session observations, not transport-handle
 	// counts.  A session becomes a real player only at ClientActive and remains
 	// active until the mapped session reaches RemoveConnection.
@@ -514,6 +529,43 @@ namespace
 		return "GNS";
 	}
 
+	static float GetRecentAdapterLatency( int flow )
+	{
+		// GNS currently exposes one connection-level RTT rather than separate
+		// send/receive samples.  Both Source flows intentionally use that same
+		// value as a direction-statistics approximation.
+		(void)flow;
+		const ASRD_GNS_Connection connection = s_connection.connection;
+		if ( connection == ASRD_GNS_CONNECTION_INVALID ||
+			s_connection.state != ASRD_GNS_SERVER_CONNECTED )
+		{
+			ResetAdapterLatencySample();
+			return 0.0f;
+		}
+
+		if ( s_adapterLatencyConnection != connection )
+		{
+			// Opaque tokens are generation-scoped.  A token change must invalidate
+			// the previous sample before querying the new connection.
+			s_adapterLatencyConnection = connection;
+			s_adapterLatencySeconds = 0.0f;
+			s_adapterLatencyValid = false;
+		}
+
+		ASRD_GNS_ConnectionRealtimeStatus status = {};
+		const int result = ASRD_GNS_GetConnectionRealTimeStatus( connection, &status );
+		if ( result == ASRD_GNS_RESULT_OK && status.connected != 0 &&
+			status.pingMilliseconds >= 0 )
+		{
+			// m_nPing is already smoothed by GNS.  Convert milliseconds to Source
+			// seconds directly; do not apply a second EMA or divide by two.
+			s_adapterLatencySeconds = (float)status.pingMilliseconds * 0.001f;
+			s_adapterLatencyValid = true;
+		}
+
+		return s_adapterLatencyValid ? s_adapterLatencySeconds : 0.0f;
+	}
+
 	static float __fastcall RegistrationAdapterGetLatency( void *self, void *,
 		int flow )
 	{
@@ -524,9 +576,7 @@ namespace
 			return 0.0f;
 		}
 
-		// No wrapper latency ABI is available, so zero remains the adapter policy.
-		// Task 20 records the slot contract and this limitation.
-		return 0.0f;
+		return GetRecentAdapterLatency( flow );
 	}
 
 	static float __fastcall RegistrationAdapterGetAvgLatency( void *self, void *,
@@ -539,7 +589,7 @@ namespace
 			return 0.0f;
 		}
 
-		return 0.0f;
+		return GetRecentAdapterLatency( flow );
 	}
 
 	static float __fastcall RegistrationAdapterGetAvgLoss( void *self, void *,
@@ -1247,6 +1297,7 @@ namespace
 			s_activeRealPlayerCount != 0;
 		Warning( "[ASRD-GNS-SERVER] map remove handle=%lu reason=%s\n",
 			(unsigned long)s_connection.connection, reason ? reason : "unspecified" );
+		ResetAdapterLatencySample();
 		s_connection.connection = ASRD_GNS_CONNECTION_INVALID;
 		s_connection.state = ASRD_GNS_SERVER_DISCONNECTED;
 		s_connection.reason = 0;
@@ -1399,6 +1450,7 @@ namespace
 		s_connection.connection = connection;
 		s_connection.state = ASRD_GNS_SERVER_PENDING;
 		s_connection.reason = 0;
+		ResetAdapterLatencySample();
 		ResetCompatibilityState( &s_connection );
 		Warning( "[ASRD-GNS-SERVER] map add handle=%lu state=pending\n",
 			(unsigned long)connection );
@@ -1655,6 +1707,7 @@ bool ASRD_GNS_ServerInit( uint16_t port )
 	// connection/session reset boundary used by the single-client deployment;
 	// changelevel tracing alone does not reset command numbers.
 	ResetShutdownState();
+	ResetAdapterLatencySample();
 	ResetCompatibilityState( &s_serverConnection );
 
 	if ( !ASRD_GNS_Initialize( 1 ) )
@@ -1810,6 +1863,7 @@ void ASRD_GNS_ServerShutdown( void )
 	}
 	if ( s_initialized )
 		ASRD_GNS_Shutdown();
+	ResetAdapterLatencySample();
 	ResetCompatibilityState( &s_serverConnection );
 	s_initialized = false;
 	s_requestedPort = 0;
